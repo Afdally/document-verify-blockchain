@@ -39,8 +39,8 @@ Aplikasi ini menggunakan konsep blockchain sederhana dengan fitur berikut:
 ### Langkah 1: Clone Repository
 Clone repository ini ke lokal mesin Anda:
 ```bash
-git clone https://github.com/username/repository-name.git
-cd repository-name
+git clone https://github.com/username/repository-name.git](https://github.com/Afdally/document-verify-blockchain.git
+cd document-verify-blockchain
 ```
 
 ### Langkah 2: Instal Dependensi
