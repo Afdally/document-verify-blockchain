@@ -79,52 +79,7 @@ curl -X POST -H "Content-Type: application/json" -d "{\"nodeUrl\":\"http://local
 
 ---
 
-## Struktur Folder
-- **node_data/**: Menyimpan data blockchain dan file upload untuk setiap node.
-- **public/**: File statis (CSS, HTML, JavaScript).
-- **app.js**: File utama aplikasi.
-- **README.md**: Dokumentasi ini.
-
----
-
-## Endpoint API
-1. **GET `/blocks`**: Mendapatkan seluruh chain.
-2. **POST `/register-node`**: Mendaftarkan node baru ke jaringan.
-3. **POST `/receive-block`**: Menerima blok baru dari node lain.
-4. **POST `/addDocument`**: Mengunggah dokumen dan menambahkan blok baru.
-5. **POST `/verifyDocument`**: Memverifikasi keaslian dokumen.
-6. **GET `/nodes`**: Mendapatkan daftar node yang terhubung.
-
----
-
-## Contoh Penggunaan
-### Upload Dokumen
-1. Buka `http://localhost:3000`.
-2. Isi form upload dokumen.
-3. Klik "Tambahkan ke Blockchain".
-
-### Verifikasi Dokumen
-1. Buka `http://localhost:3000/verify`.
-2. Unggah dokumen yang ingin diverifikasi.
-3. Sistem akan menampilkan status verifikasi (Valid/Invalid).
-
-### Lihat Dokumen
-1. Buka `http://localhost:3000/documents`.
-2. Semua dokumen yang telah diunggah akan ditampilkan beserta detailnya.
-
----
-
-## Kontribusi
-Jika Anda ingin berkontribusi, silakan buka issue atau pull request. Pastikan untuk mengikuti panduan kontribusi yang ada.
-
----
-
-## Lisensi
-Aplikasi ini dilisensikan di bawah [MIT License](LICENSE).
-
----
-
-## Penjelasan Blockchain dalam Aplikasi Ini
+# Penjelasan Blockchain dalam Aplikasi Ini
 ### 1. **Genesis Block**
 Genesis block adalah blok pertama yang dibuat saat blockchain diinisialisasi. Blok ini memiliki:
 - `index: 0`
