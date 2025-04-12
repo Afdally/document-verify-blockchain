@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jaringan Blockchain - BlockDoc</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+
+<body>
+    <nav aria-label="Main navigation">
+        <div class="logo">BlockDoc</div>
+        <div class="nav-menu">
+            <a href="/">Tambah</a>
+            <a href="/documents">Dokumen</a>
+            <a href="/verify">Verifikasi</a>
+            <a href="/network">Jaringan</a>
+        </div>
+    </nav>
+
+    <header>
+        <div class="header-content">
+            <h1>Sistem Validasi Dokumen Blockchain</h1>
+            <p>Keamanan dan Keaslian Dokumen dengan Teknologi Blockchain</p>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="network-header">
+            <h2>Jaringan Blockchain Dokumen</h2>
+            <div class="network-controls">
+                <button id="syncNodesBtn">Sinkronisasi Node</button>
+            </div>
+        </div>
+
+        <div class="node-selector">
+            <select id="nodeList">
+                <option value="">Pilih Node Untuk Ditampilkan...</option>
+            </select>
+        </div>
+
+        <div id="networkStatus" class="card">
+            <h3>Status Jaringan</h3>
+            <div id="nodesContainer" class="loading">
+                Memuat informasi jaringan...
+            </div>
+        </div>
+
+
+        <div class="add-node-form">
+            <h3>Tambahkan Node Baru</h3>
+            <div class="form-group">
+                <label for="nodeUrl">URL Node</label>
+                <input type="text" id="nodeUrl" placeholder="Contoh: http://localhost:3001">
+            </div>
+            <button id="addNodeBtn" class="btn">Tambahkan Node</button>
+        </div>
+    </div>
+
+    <script>
+        // Elemen DOM
+        const nodeList = document.getElementById('nodeList');
+        const nodesContainer = document.getElementById('nodesContainer');
+        const blockContainer = document.getElementById('blockContainer');
+        const syncNodesBtn = document.getElementById('syncNodesBtn');
+        const addNodeBtn = document.getElementById('addNodeBtn');
+
+        let autoRefreshInterval;
+
+        // Fungsi utilitas
+        function isValidUrl(url) {
+            try {
+                new URL(url);
+                return true;
+            } catch {
+                return false;
+            }
+        }
+
+        function showNotification(message, type = 'info') {
+            const notification = document.createElement('div');
+            notification.className = `notification ${type}`;
+            notification.textContent = message;
+            document.body.appendChild(notification);
+            setTimeout(() => notification.remove(), 3000);
+        }
+
+        async function checkNodeStatus(nodeUrl) {
+            try {
+                const response = await fetch(`${nodeUrl}/node-info`, { timeout: 3000 });
+                if (!response.ok) return { status: 'error', data: null };
+                const data = await response.json();
+                return {
+                    status: data.status || 'online',
+                    data: {
+                        blocksCount: data.blocksCount || 0,
+                        peersCount: data.peersCount || 0
+                    }
+                };
+            } catch {
+                return { status: 'offline', data: null };
+            }
+        }
+
+        // Fungsi utama
+        async function loadNodes() {
+            try {
+                nodesContainer.innerHTML = '<div class="loading">Memuat informasi jaringan...</div>';
+
+                const response = await fetch('/nodes');
+                const { nodeName, nodes } = await response.json();
+
+                // Update dropdown
+                nodeList.innerHTML = '<option value="">Pilih Node Untuk Ditampilkan...</option>';
+                const currentOption = document.createElement('option');
+                currentOption.value = `http://localhost:${window.location.port}`;
+                currentOption.textContent = `${nodeName} (Node Ini)`;
+                nodeList.appendChild(currentOption);
+
+                // Render node cards
+                nodesContainer.innerHTML = '';
+
+                // Current node
+                const currentNodeCard = createNodeCard(
+                    nodeName,
+                    `http://localhost:${window.location.port}`,
+                    true
+                );
+                nodesContainer.appendChild(currentNodeCard);
+
+                // Connected nodes
+                if (nodes.length === 0) {
+                    nodesContainer.innerHTML += '<p class="empty">Tidak ada node terhubung</p>';
+                } else {
+                    for (const nodeUrl of nodes) {
+                        const status = await checkNodeStatus(nodeUrl);
+                        const nodeCard = createNodeCard(
+                            nodeUrl.replace(/https?:\/\//, ''),
+                            nodeUrl,
+                            false,
+                            status
+                        );
+                        nodesContainer.appendChild(nodeCard);
+                    }
+                }
+
+                // Add nodes to dropdown
+                nodes.forEach(node => {
+                    const option = document.createElement('option');
+                    option.value = node;
+                    option.textContent = node;
+                    nodeList.appendChild(option);
+                });
+
+            } catch (error) {
+                showNotification('Gagal memuat daftar node', 'error');
+                console.error('Load nodes error:', error);
+            }
+        }
+
+        function createNodeCard(title, url, isCurrent, status) {
+            const card = document.createElement('div');
+            card.className = 'node-card';
+
+            const statusText = status.status === 'online' ? 'Online' :
+                status.status === 'offline' ? 'Offline' :
+                    'Unknown';
+            const statusClass = status.status;
+            card.innerHTML = `
+          <h3>${title}
+            <span class="node-status ${statusClass}">${statusText}</span>
+          </h3>
+          <div class="node-stats">
+            <div class="stat-item">
+              <h4>Alamat</h4>
+              <p>${new URL(url).host}</p>
+            </div>
+            ${!isCurrent ? `
+            <div class="stat-item">
+              <h4>Blok</h4>
+              <p>${status.data?.blocksCount || 'N/A'}</p>
+            </div>
+            ` : ''}
+          </div>
+          ${!isCurrent ? `
+          <div class="node-actions">
+            <button onclick="syncWithNode('${url}')">Sinkronisasi</button>
+          </div>
+          ` : ''}
+        `;
+
+            return card;
+        }
+
+        async function loadNodes() {
+            try {
+                nodesContainer.innerHTML = '<div class="loading">Memuat informasi jaringan...</div>';
+
+                const response = await fetch('/nodes');
+                if (!response.ok) throw new Error(await response.text());
+
+                const { nodeName, nodes } = await response.json();
+
+                // Update dropdown
+                nodeList.innerHTML = '<option value="">Pilih Node...</option>';
+                nodeList.innerHTML += `<option value="http://localhost:${window.location.port}">${nodeName} (Node Ini)</option>`;
+
+                // Render node cards
+                nodesContainer.innerHTML = '';
+                const currentNodeCard = createNodeCard(
+                    nodeName,
+                    `http://localhost:${window.location.port}`,
+                    true,
+                    { status: 'online' }
+                );
+                nodesContainer.appendChild(currentNodeCard);
+
+                // Cek status node lain
+                for (const nodeUrl of nodes) {
+                    const status = await checkNodeStatus(nodeUrl);
+                    const nodeCard = createNodeCard(
+                        nodeUrl,
+                        nodeUrl,
+                        false,
+                        status
+                    );
+                    nodesContainer.appendChild(nodeCard);
+                }
+
+            } catch (error) {
+                showNotification(`Gagal memuat node: ${error.message}`, 'error');
+                console.error('Load nodes error:', error);
+            }
+        }
+
+        function renderChain(chain) {
+            blockContainer.innerHTML = '';
+
+            chain.forEach((block, index) => {
+                const blockEl = document.createElement('div');
+                blockEl.className = 'block-item';
+
+                blockEl.innerHTML = `
+      <h4>${index === 0 ? 'Genesis Block' : `Blok #${block.index}`}</h4>
+      <p>Validator: ${block.validator}</p>
+      <p>Hash: ${block.hash.substring(0, 15)}...</p>
+    `;
+
+                blockContainer.appendChild(blockEl);
+            });
+        };
+
+
+        function validateBlockHash(block) {
+            const tempBlock = new Block(
+                block.index,
+                block.timestamp,
+                block.documentData,
+                block.previousHash,
+                block.validator
+            );
+            return tempBlock.hash === block.hash;
+        }
+
+        async function syncNodes() {
+            try {
+                const response = await fetch('/resolve-conflicts', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`HTTP ${response.status}: ${errorText}`);
+                }
+
+                const result = await response.json();
+
+                if (result.resolved) {
+                    showNotification(`Berhasil disinkronisasi! Panjang rantai baru: ${result.newChainLength}`, 'success');
+                } else {
+                    showNotification(result.message, 'info');
+                }
+
+                loadNodes();
+                if (nodeList.value) loadNodeChain(nodeList.value);
+
+            } catch (error) {
+                showNotification(`Gagal sinkronisasi: ${error.message}`, 'error');
+                console.error('Sync error:', error);
+            }
+        }
+
+        async function addNewNode() {
+            const nodeUrlInput = document.getElementById('nodeUrl');
+            const nodeUrl = nodeUrlInput.value.trim();
+
+            if (!nodeUrl) {
+                showNotification('URL node tidak boleh kosong', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch('/register-node', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ nodeUrl })
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    showNotification(`Node ${nodeUrl} berhasil ditambahkan! Total node: ${result.totalNodes}`, 'success');
+                    nodeUrlInput.value = '';
+                    await loadNodes(); // Refresh daftar node
+
+                    // Jika dropdown kosong, pilih node yang baru ditambahkan
+                    if (!nodeList.value) {
+                        nodeList.value = nodeUrl;
+                        await loadNodeChain(nodeUrl);
+                    }
+                } else {
+                    throw new Error(result.error || 'Gagal menambahkan node');
+                }
+            } catch (error) {
+                showNotification(`Gagal: ${error.message}`, 'error');
+                console.error('Error:', error);
+            }
+        }
+
+        // Auto-refresh logic
+        function startAutoRefresh() {
+            autoRefreshInterval = setInterval(async () => {
+                if (document.visibilityState === 'visible') {
+                    await loadNodes();
+                    if (nodeList.value) await loadNodeChain(nodeList.value);
+                }
+            }, 30000);
+        }
+
+        // Inisialisasi
+        document.addEventListener('DOMContentLoaded', () => {
+            loadNodes();
+            startAutoRefresh();
+        });
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'hidden') {
+                clearInterval(autoRefreshInterval);
+            } else {
+                startAutoRefresh();
+            }
+        });
+
+        // Event listeners
+        refreshChainBtn.addEventListener('click', () => {
+            if (nodeList.value) loadNodeChain(nodeList.value);
+            else showNotification('Pilih node terlebih dahulu', 'warning');
+        });
+
+        syncNodesBtn.addEventListener('click', syncNodes);
+        addNodeBtn.addEventListener('click', addNewNode);
+        nodeList.addEventListener('change', function () {
+            if (this.value) loadNodeChain(this.value);
+        });
+
+        window.syncWithNode = async (nodeUrl) => {
+            try {
+                // Dapatkan daftar node saat ini dari server
+                const currentNodes = await fetch('/nodes')
+                    .then(res => res.json())
+                    .then(data => data.nodes);
+
+                // Kirim ke node tujuan untuk sinkronisasi
+                const response = await fetch(`${nodeUrl}/sync-nodes`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ nodes: currentNodes })
+                });
+
+                if (!response.ok) throw new Error('Gagal sinkronisasi');
+                showNotification('Sinkronisasi berhasil!', 'success');
+                loadNodes();
+            } catch (error) {
+                showNotification(`Error: ${error.message}`, 'error');
+            }
+        };
+    </script>
+</body>
+
+</html>
