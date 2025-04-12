@@ -31,6 +31,7 @@
         <div class="network-header">
             <h2>Jaringan Blockchain Dokumen</h2>
             <div class="network-controls">
+                <button id="refreshChainBtn">Refresh Rantai</button>
                 <button id="syncNodesBtn">Sinkronisasi Node</button>
             </div>
         </div>
@@ -48,7 +49,6 @@
             </div>
         </div>
 
-
         <div class="add-node-form">
             <h3>Tambahkan Node Baru</h3>
             <div class="form-group">
@@ -64,6 +64,7 @@
         const nodeList = document.getElementById('nodeList');
         const nodesContainer = document.getElementById('nodesContainer');
         const blockContainer = document.getElementById('blockContainer');
+        const refreshChainBtn = document.getElementById('refreshChainBtn');
         const syncNodesBtn = document.getElementById('syncNodesBtn');
         const addNodeBtn = document.getElementById('addNodeBtn');
 
