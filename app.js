@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const express = require("express");
 const bodyParser = require("body-parser");
 const path = require("path");
@@ -11,17 +13,17 @@ const DEBUG = true;
 const app = express();
 const port = process.env.PORT || 3000;
 
-const os = require('os');
+const os = require("os");
 const networkInterfaces = os.networkInterfaces();
 const getLocalIp = () => {
   for (const interface of Object.values(networkInterfaces)) {
     for (const config of interface) {
-      if (config.family === 'IPv4' && !config.internal) {
+      if (config.family === "IPv4" && !config.internal) {
         return config.address;
       }
     }
   }
-  return 'localhost';
+  return "localhost";
 };
 const LOCAL_IP = getLocalIp();
 
@@ -32,7 +34,6 @@ const AUTHORIZED_VALIDATORS = [
   "validator1",
   "validator2",
   "genesis",
-  NODE_NAME,
 ];
 const NETWORK_NODES = new Set(); // Daftar node dalam jaringan
 
@@ -646,20 +647,59 @@ app.post("/addDocument", upload.single("document"), async (req, res) => {
     );
 
     await docChain.addBlock(newBlock);
-    res.redirect("/documents");
+    res.redirect("/blockchain");
   } catch (error) {
     console.error("Error adding document:", error);
     res.status(500).send(`Error memproses dokumen: ${error.message}`);
   }
 });
 
-// Tampilkan semua dokumen
-app.get("/documents", (req, res) => {
+// Tampilkan semua dokumen dengan kemampuan edit
+app.get("/blockchain", (req, res) => {
   try {
-    let documentsHTML = `<h2>Catatan Dokumen Blockchain (Node: ${NODE_NAME})</h2>`;
+    // Fungsi untuk memeriksa validitas block
+    const isBlockValid = (block, previousBlock) => {
+      if (block.index === 0) {
+        return block.validator === "genesis" && block.previousHash === "0";
+      }
+
+      const tempBlock = new Block(
+        block.index,
+        block.timestamp,
+        block.documentData,
+        block.previousHash,
+        block.validator
+      );
+
+      const isHashValid = block.hash === tempBlock.calculateHash();
+      const isPrevHashValid = block.previousHash === previousBlock.hash;
+
+      return isHashValid && isPrevHashValid;
+    };
+
+    let documentsHTML = `
+      <h2>Catatan Dokumen Blockchain (Node: ${NODE_NAME})</h2>
+      <div class="blockchain-controls">
+        <button onclick="refreshChain()">Refresh</button>
+        <button onclick="validateChain()">Validasi Rantai</button>
+      </div>
+    `;
 
     docChain.chain.forEach((block, i) => {
-      if (i === 0) return; // Skip genesis block
+      const previousBlock = i > 0 ? docChain.chain[i - 1] : null;
+      const isValid = i === 0 || isBlockValid(block, previousBlock);
+      const blockClass = isValid ? "block-valid" : "block-invalid";
+
+      if (i === 0) {
+        // Genesis block
+        documentsHTML += `
+          <div class="document-card genesis ${blockClass}">
+            <h3>Genesis Block</h3>
+            <div class="block-hash">Hash: ${block.hash}</div>
+          </div>
+        `;
+        return;
+      }
 
       let fileStatus = "Tidak Diketahui";
       try {
@@ -676,26 +716,75 @@ app.get("/documents", (req, res) => {
       }
 
       documentsHTML += `
-        <div class="document-card">
-          <h3>Dokumen #${block.documentData.documentId}</h3>
+        <div class="document-card ${blockClass}" id="block-${block.index}">
+          <div class="block-header">
+            <h3>Block #${block.index}</h3>
+            <div class="block-actions">
+              <button onclick="editBlock(${block.index})">Edit</button>
+            </div>
+          </div>
+          
           <div class="document-details">
-            <p><strong>Judul:</strong> ${block.documentData.title}</p>
-            <p><strong>Penerbit:</strong> ${block.documentData.issuer}</p>
-            <p><strong>Penerima:</strong> ${block.documentData.recipient}</p>
-            <p><strong>Tanggal Penerbitan:</strong> ${
-              block.documentData.issueDate
-            }</p>
-            <p><strong>Validator:</strong> ${block.validator}</p>
-            <p><strong>Ditambahkan pada:</strong> ${new Date(
-              block.timestamp
-            ).toLocaleString()}</p>
-            <p><strong>File Ada:</strong> ${fileStatus}</p>
-            <p><strong>Hash Dokumen:</strong> <span class="hash">${
-              block.documentData.documentHash
-            }</span></p>
-            <p><strong>Hash Blok:</strong> <span class="hash">${
-              block.hash
-            }</span></p>
+            <div class="hash-info">
+              <p><strong>Previous Hash:</strong> 
+                <span class="previous-hash" contenteditable="true" data-index="${
+                  block.index
+                }">
+                  ${block.previousHash}
+                </span>
+              </p>
+              <p><strong>Block Hash:</strong> <span class="hash">${
+                block.hash
+              }</span></p>
+            </div>
+            
+            <div class="document-info">
+              <p><strong>ID Dokumen:</strong> <span contenteditable="true" data-field="documentId">${
+                block.documentData.documentId
+              }</span></p>
+              <p><strong>Judul:</strong> <span contenteditable="true" data-field="title">${
+                block.documentData.title
+              }</span></p>
+              <p><strong>Penerbit:</strong> <span contenteditable="true" data-field="issuer">${
+                block.documentData.issuer
+              }</span></p>
+              <p><strong>Penerima:</strong> <span contenteditable="true" data-field="recipient">${
+                block.documentData.recipient
+              }</span></p>
+              <p><strong>Tanggal:</strong> <span contenteditable="true" data-field="issueDate">${
+                block.documentData.issueDate
+              }</span></p>
+              <p><strong>File Status:</strong> ${fileStatus}</p>
+              <p><strong>Document Hash:</strong> ${
+                block.documentData.documentHash
+              }</p>
+            </div>
+          </div>
+          
+          <div class="edit-form" id="edit-form-${
+            block.index
+          }" style="display:none">
+            <h4>Edit Block</h4>
+            <div class="form-group">
+              <label>Previous Hash:</label>
+              <input type="text" id="edit-prev-hash-${block.index}" value="${
+        block.previousHash
+      }">
+            </div>
+            <div class="form-group">
+              <label>Document Data:</label>
+              <textarea id="edit-doc-data-${block.index}">${JSON.stringify(
+        block.documentData,
+        null,
+        2
+      )}</textarea>
+            </div>
+            <button onclick="saveBlockChanges(${
+              block.index
+            })">Save Changes</button>
+            <button onclick="document.getElementById('edit-form-${
+              block.index
+            }').style.display='none'">Cancel</button>
           </div>
         </div>
       `;
@@ -704,29 +793,109 @@ app.get("/documents", (req, res) => {
     res.send(`
       <!DOCTYPE html>
       <html>
-       <head>
+      <head>
         <meta charset="UTF-8">
         <title>Daftar Dokumen Blockchain</title>
         <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <link href="/css/style.css" rel="stylesheet">
+        <style>
+          .document-card {
+            margin-bottom: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            transition: all 0.3s;
+          }
+          
+          .block-valid {
+            border-left: 5px solid #4CAF50;
+            background-color: #f8fff8;
+          }
+          
+          .block-invalid {
+            border-left: 5px solid #F44336;
+            background-color: #fff8f8;
+            animation: pulse 2s infinite;
+          }
+          
+          @keyframes pulse {
+            0% { background-color: #fff8f8; }
+            50% { background-color: #ffecec; }
+            100% { background-color: #fff8f8; }
+          }
+          
+          .block-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+          }
+          
+          .hash, .previous-hash {
+            font-family: monospace;
+            word-break: break-all;
+          }
+          
+          .edit-form {
+            margin-top: 15px;
+            padding: 15px;
+            background: #f5f5f5;
+            border-radius: 5px;
+          }
+          
+          .form-group {
+            margin-bottom: 10px;
+          }
+          
+          .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+          }
+          
+          .form-group input, .form-group textarea {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+          }
+          
+          .form-group textarea {
+            min-height: 100px;
+            font-family: monospace;
+          }
+          
+          button {
+            padding: 8px 15px;
+            background: #db3466;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+          }
+          
+          button:hover {
+            background:rgb(172, 42, 81);
+          }
+        </style>
       </head>
       <nav aria-label="Main navigation">
-      <div class="logo">BlockDoc</div>
-      <div class="nav-menu">
-        <a href="/" >Tambah</a>
-        <a href="/documents" >Dokumen</a>
-        <a href="/verify">Verifikasi</a>
-        <a href="/network">Jaringan</a>
-      </div>
-    </nav>
-    
-    <header>
-      <div class="header-content">
-        <h1>Sistem Validasi Dokumen Blockchain</h1>
-        <p>Keamanan dan Keaslian Dokumen dengan Teknologi Blockchain</p>
-      </div>
-    </header>
+        <div class="logo">BlockDoc</div>
+        <div class="nav-menu">
+          <a href="/">Tambah</a>
+      <a href="/blockchain">Blockchain</a>
+          <a href="/verify">Verifikasi</a>
+          <a href="/network">Jaringan</a>
+        </div>
+      </nav>
+      
+      <header>
+        <div class="header-content">
+          <h1>Sistem Validasi Dokumen Blockchain</h1>
+          <p>Keamanan dan Keaslian Dokumen dengan Teknologi Blockchain</p>
+        </div>
+      </header>
       <body>
         <div class="container">
           ${documentsHTML}
@@ -740,12 +909,117 @@ app.get("/documents", (req, res) => {
             <p><strong>Total Dokumen:</strong> ${docChain.chain.length - 1}</p>
           </div>
         </div>
+        
+        <script>
+          function editBlock(index) {
+            document.getElementById('edit-form-' + index).style.display = 'block';
+          }
+          
+          async function saveBlockChanges(index) {
+            const prevHash = document.getElementById('edit-prev-hash-' + index).value;
+            const docData = document.getElementById('edit-doc-data-' + index).value;
+            
+            try {
+              const response = await fetch('/update-block', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  index: index,
+                  previousHash: prevHash,
+                  documentData: JSON.parse(docData)
+                })
+              });
+              
+              const result = await response.json();
+              if (result.success) {
+                alert('Block updated successfully!');
+                location.reload();
+              } else {
+                alert('Error: ' + result.message);
+              }
+            } catch (error) {
+              alert('Error updating block: ' + error.message);
+            }
+          }
+          
+          function refreshChain() {
+            location.reload();
+          }
+          
+          async function validateChain() {
+            try {
+              const response = await fetch('/validate-chain', {
+                method: 'POST'
+              });
+              
+              const result = await response.json();
+              alert(result.valid ? 'Chain is valid!' : 'Chain is invalid!\\n' + result.message);
+            } catch (error) {
+              alert('Error validating chain: ' + error.message);
+            }
+          }
+        </script>
       </body>
       </html>
     `);
   } catch (error) {
     console.error("Error rendering documents:", error);
     res.status(500).send(`Error menampilkan dokumen: ${error.message}`);
+  }
+});
+
+// Endpoint untuk validasi rantai
+app.post("/validate-chain", (req, res) => {
+  try {
+    const isValid = docChain.validateChain(docChain.chain);
+    res.json({
+      valid: isValid,
+      message: isValid
+        ? "Rantai blockchain valid"
+        : "Ditemukan block yang tidak valid dalam rantai",
+    });
+  } catch (error) {
+    res.status(500).json({
+      valid: false,
+      message: error.message,
+    });
+  }
+});
+
+// Endpoint untuk update block
+app.post("/update-block", (req, res) => {
+  try {
+    const { index, previousHash, documentData } = req.body;
+
+    // Temukan block yang akan diupdate
+    const blockToUpdate = docChain.chain.find((b) => b.index === index);
+    if (!blockToUpdate) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Block not found" });
+    }
+
+    // Update data block
+    blockToUpdate.previousHash = previousHash;
+    blockToUpdate.documentData = documentData;
+
+    // Hitung ulang hash
+    blockToUpdate.hash = new Block(
+      blockToUpdate.index,
+      blockToUpdate.timestamp,
+      blockToUpdate.documentData,
+      blockToUpdate.previousHash,
+      blockToUpdate.validator
+    ).calculateHash();
+
+    // Simpan perubahan
+    docChain.saveToFile();
+
+    res.json({ success: true, message: "Block updated" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
@@ -823,7 +1097,7 @@ app.post("/verifyDocument", upload.single("document"), async (req, res) => {
           <div class="logo">BlockDoc</div>
           <div class="nav-menu">
             <a href="/">Tambah</a>
-            <a href="/documents">Dokumen</a>
+      <a href="/blockchain">Blockchain</a>
             <a href="/verify">Verifikasi</a>
             <a href="/network">Jaringan</a>
           </div>
@@ -841,7 +1115,7 @@ app.post("/verifyDocument", upload.single("document"), async (req, res) => {
           <div class="nav-links">
             <a href="/">Tambah Dokumen Baru</a> | 
             <a href="/verify">Verifikasi Dokumen Lain</a> |
-            <a href="/documents">Lihat Semua Dokumen</a>
+            <a href="/blockchain">Lihat Semua Dokumen</a>
           </div>
         </div>
       </body>
@@ -917,7 +1191,7 @@ app.post("/verifyDocumentById", (req, res) => {
           <div class="logo">BlockDoc</div>
           <div class="nav-menu">
             <a href="/">Tambah</a>
-            <a href="/documents">Dokumen</a>
+      <a href="/blockchain">Blockchain</a>
             <a href="/verify">Verifikasi</a>
             <a href="/network">Jaringan</a>
           </div>
@@ -935,7 +1209,7 @@ app.post("/verifyDocumentById", (req, res) => {
           <div class="nav-links">
             <a href="/">Tambah Dokumen Baru</a> | 
             <a href="/verify">Verifikasi Dokumen Lain</a> |
-            <a href="/documents">Lihat Semua Dokumen</a>
+            <a href="/blockchain">Lihat Semua Dokumen</a>
           </div>
         </div>
       </body>

@@ -14,7 +14,7 @@
         <div class="logo">BlockDoc</div>
         <div class="nav-menu">
             <a href="/">Tambah</a>
-            <a href="/documents">Dokumen</a>
+            <a href="/blockchain">Blockchain</a>
             <a href="/verify">Verifikasi</a>
             <a href="/network">Jaringan</a>
         </div>
@@ -30,19 +30,19 @@
     <div class="container">
         <div class="network-header">
             <h2>Jaringan Blockchain Dokumen</h2>
-            <div class="network-controls">
+            <div class="network-controls" style="display: none;">
                 <button id="refreshChainBtn">Refresh Rantai</button>
                 <button id="syncNodesBtn">Sinkronisasi Node</button>
             </div>
         </div>
 
         <div class="node-selector">
-            <select id="nodeList">
+            <select id="nodeList" style="display: none;">
                 <option value="">Pilih Node Untuk Ditampilkan...</option>
             </select>
         </div>
 
-        <div id="networkStatus" class="card">
+        <div id="networkStatus" class="card" >
             <h3>Status Jaringan</h3>
             <div id="nodesContainer" class="loading">
                 Memuat informasi jaringan...
