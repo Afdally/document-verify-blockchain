@@ -8,5 +8,20 @@
     "username": "jabir",
     "password": "$2b$10$m00pTFGe09MiU43xWz5GVOuhWZnQb087n165cARRf4/jFJSneStHi",
     "role": "document_manager"
+  },
+  {
+    "username": "wahyu",
+    "password": "$2b$10$aswC1l5SzvJtXa6ufBBO5ej5X97WyGcRXULvZA7NKSbjLi5vnnl22",
+    "role": "document_manager"
+  },
+  {
+    "username": "afdal",
+    "password": "$2b$10$99c9hEj8YiCDLAZWfeIdj.8wTvK50GKYlHCClavBVVWBPtbFrhLwK",
+    "role": "document_manager"
+  },
+  {
+    "username": "jumain",
+    "password": "$2b$10$c6RGFEJIrahG.pMgBOsfseanwc49PBIWG0xlYufOFbZwl75fzKOc2",
+    "role": "document_manager"
   }
 ]

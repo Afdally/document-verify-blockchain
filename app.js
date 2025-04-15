@@ -676,10 +676,9 @@ app.post(
   requireAuth,
   requireAdminOrDocManager,
   upload.single("document"),
-  (req, res) => {
+  async (req, res) => {
     try {
       const user = req.session.user;
-      const docChain = new Blockchain(user.username);
       const { documentId, title, issuer, recipient, issueDate } = req.body;
       const uploadedFile = req.file;
 
@@ -726,16 +725,16 @@ app.post(
         verificationStatus: true,
       };
 
-      // Tambahkan block baru ke blockchain
       const newBlock = new Block(
         docChain.chain.length,
         Date.now(),
         record,
         docChain.getLatestBlock().hash,
-        user.username // Gunakan username sebagai validator
+        user.username
       );
 
-      docChain.addBlock(newBlock);
+
+      await docChain.addBlock(newBlock);
       res.redirect("/blockchain");
     } catch (error) {
       console.error("Error adding document:", error);
@@ -752,6 +751,7 @@ app.get("/blockchain", requireAuth, requireAdminOrDocManager, (req, res) => {
 app.get("/blockchain-data", requireAuth, requireAdminOrDocManager, (req, res) => {
   try {
     const user = req.session.user;
+    docChain.loadFromFile(); 
     const chain = docChain.chain.map(block => {
       // Only process file status for non-genesis blocks
       if (block.index > 0 && block.documentData && block.documentData.filePath) {
