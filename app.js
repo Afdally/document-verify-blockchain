@@ -1,6 +1,9 @@
-require('dotenv').config();
+require("dotenv").config();
 
 const express = require("express");
+const session = require("express-session");
+const bcrypt = require("bcrypt");
+const saltRounds = 10;
 const bodyParser = require("body-parser");
 const path = require("path");
 const crypto = require("crypto");
@@ -30,12 +33,10 @@ const LOCAL_IP = getLocalIp();
 // Konfigurasi awal
 const NODE_NAME =
   process.env.NODE_NAME || `node_${crypto.randomBytes(2).toString("hex")}`;
-const AUTHORIZED_VALIDATORS = [
-  "validator1",
-  "validator2",
-  "genesis",
-];
+const AUTHORIZED_VALIDATORS = ["validator1", "validator2", "genesis"];
 const NETWORK_NODES = new Set(); // Daftar node dalam jaringan
+
+
 
 // Konfigurasi kriptografi - menggunakan env var
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY
@@ -46,7 +47,13 @@ const IV_LENGTH = 16;
 // Konfigurasi penyimpanan dengan validasi file
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    const uploadDir = path.join(__dirname, "node_data", NODE_NAME, "uploads");
+    const user = req.session.user;
+    const uploadDir = path.join(
+      __dirname,
+      "node_data",
+      user?.username,
+      "uploads"
+    );
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }
@@ -104,18 +111,101 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(express.static("public"));
 
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET || "rahasia_kita",
+    resave: false,
+    saveUninitialized: true,
+    cookie: { secure: false },
+  })
+);
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) {
-    // Error dari Multer
     return res.status(400).send(`Error upload: ${err.message}`);
   } else if (err) {
-    // Error lainnya
     return res.status(500).send(`Server error: ${err.message}`);
   }
   next();
 });
 
+class User {
+  static filePath = path.join(__dirname, "node_data", "users.json");
+
+  static async getAll() {
+    try {
+      if (!fs.existsSync(User.filePath)) return [];
+      return JSON.parse(await fs.promises.readFile(User.filePath));
+    } catch (error) {
+      return [];
+    }
+  }
+
+  static async saveAll(users) {
+    await fs.promises.mkdir(path.dirname(User.filePath), { recursive: true });
+    await fs.promises.writeFile(User.filePath, JSON.stringify(users, null, 2));
+  }
+
+  static async create(username, password, role = "user") {
+    const users = await User.getAll();
+    if (users.find((u) => u.username === username))
+      throw new Error("Username sudah ada");
+    const user = {
+      username,
+      password: await bcrypt.hash(password, saltRounds),
+      role,
+    };
+    users.push(user);
+    await User.saveAll(users);
+    return user;
+  }
+
+  static async findByUsername(username) {
+    const users = await User.getAll();
+    return users.find((u) => u.username === username);
+  }
+
+  static async verify(username, password) {
+    const user = await User.findByUsername(username);
+    if (!user) return false;
+    return (await bcrypt.compare(password, user.password)) ? user : false;
+  }
+}
+
+// Inisialisasi admin saat server start
+async function initializeAdminUser() {
+  try {
+    const adminExists = await User.findByUsername("admin");
+    if (!adminExists) {
+      await User.create("admin", "admin123", "admin");
+      console.log("Admin user created successfully");
+    }
+  } catch (error) {
+    console.error("Error initializing admin user:", error);
+  }
+}
+
+const requireAuth = (req, res, next) => {
+  if (!req.session.user) return res.redirect("/login");
+  next();
+};
+
+const requireAdmin = (req, res, next) => {
+  if (req.session.user?.role !== "admin")
+    return res.status(403).send("Akses ditolak");
+  next();
+};
+
+const requireAdminOrDocManager = (req, res, next) => {
+  if (
+    req.session.user?.role !== "admin" &&
+    req.session.user?.role !== "document_manager"
+  ) {
+    return res.status(403).send("Akses ditolak");
+  }
+  next();
+};
 // ----------------------------
 // Enhanced Crypto Functions
 // ----------------------------
@@ -192,8 +282,7 @@ class Block {
 }
 
 class Blockchain {
-  constructor(nodeName) {
-    this.nodeName = nodeName;
+  constructor() {
     this.chain = [];
     this.pendingBlocks = [];
     this.loadFromFile();
@@ -241,14 +330,12 @@ class Blockchain {
     // Validasi normal
     const isHashValid = newBlock.hash === newBlock.calculateHash();
     const isPrevHashValid = newBlock.previousHash === latestBlock.hash;
-    const isValidatorValid = AUTHORIZED_VALIDATORS.includes(newBlock.validator);
 
     console.log(`[DEBUG] Block validation results:
     - Hash Valid: ${isHashValid}
-    - Previous Hash Valid: ${isPrevHashValid}
-    - Validator Valid: ${isValidatorValid}`);
+    - Previous Hash Valid: ${isPrevHashValid}`);
 
-    return isHashValid && isPrevHashValid && isValidatorValid;
+    return isHashValid && isPrevHashValid;
   }
 
   async broadcastBlock(block) {
@@ -264,66 +351,29 @@ class Blockchain {
     const broadcastPromises = [];
 
     for (const node of NETWORK_NODES) {
-      if (node !== `http://${LOCAL_IP}:${port}`) {
-        try {
-          broadcastPromises.push(
-            axios.post(`${node}/receive-block`, blockData).catch((err) => {
-              console.error(`Error broadcasting to ${node}:`, err.message);
-            })
-          );
-        } catch (err) {
-          console.error(`Error broadcasting to ${node}:`, err.message);
-        }
+      try {
+        const response = await axios.post(`${node}/receive-block`, blockData);
+        console.log(`Broadcast to ${node} success:`, response.data);
+      } catch (err) {
+        console.error(
+          `Error broadcasting to ${node}:`,
+          err.response?.data || err.message
+        );
       }
     }
 
-    // Tunggu semua broadcast selesai
-    await Promise.allSettled(broadcastPromises);
     return blockData;
   }
 
   saveToFile() {
-    try {
-      const data = JSON.stringify(this.chain, null, 2);
-      const dir = path.join(__dirname, "node_data", this.nodeName);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-      fs.writeFileSync(path.join(dir, "blockchain.json"), data);
-    } catch (error) {
-      console.error("Error saving blockchain:", error);
-    }
+    const filePath = path.join(__dirname, "node_data", "blockchain.json");
+    fs.writeFileSync(filePath, JSON.stringify(this.chain, null, 2));
   }
 
   loadFromFile() {
-    const filePath = path.join(
-      __dirname,
-      "node_data",
-      this.nodeName,
-      "blockchain.json"
-    );
+    const filePath = path.join(__dirname, "node_data", "blockchain.json");
     if (fs.existsSync(filePath)) {
-      try {
-        const data = fs.readFileSync(filePath);
-        this.chain = JSON.parse(data).map((block) => {
-          const newBlock = new Block(
-            block.index,
-            block.timestamp,
-            block.documentData,
-            block.previousHash,
-            block.validator
-          );
-          // Pastikan hash dihitung dengan benar
-          if (newBlock.hash !== block.hash) {
-            console.warn(`Warning: Hash mismatch for block ${block.index}`);
-          }
-          return newBlock;
-        });
-      } catch (error) {
-        console.error("Error loading blockchain:", error);
-        // Jika error, mulai dengan chain baru
-        this.chain = [];
-      }
+      this.chain = JSON.parse(fs.readFileSync(filePath));
     }
   }
 
@@ -332,19 +382,19 @@ class Blockchain {
     let newChain = null;
 
     for (const node of NETWORK_NODES) {
-      if (node !== `http://${LOCAL_IP}:${port}`) {
-        try {
-          const response = await axios.get(`${node}/blocks`);
-          if (
-            response.data.length > maxLength &&
-            this.validateChain(response.data)
-          ) {
-            maxLength = response.data.length;
-            newChain = response.data;
-          }
-        } catch (err) {
-          console.error(`Error checking node ${node}:`, err.message);
+      try {
+        const response = await axios.get(`${node}/blocks`);
+        const candidateChain = response.data;
+
+        if (
+          candidateChain.length > maxLength &&
+          this.validateChain(candidateChain)
+        ) {
+          maxLength = candidateChain.length;
+          newChain = candidateChain;
         }
+      } catch (err) {
+        console.error(`Error checking node ${node}:`, err.message);
       }
     }
 
@@ -355,7 +405,7 @@ class Blockchain {
     }
     return false;
   }
-
+  
   validateChain(chain) {
     for (let i = 1; i < chain.length; i++) {
       const currentBlock = chain[i];
@@ -391,25 +441,53 @@ class Blockchain {
   }
 }
 
-// Inisialisasi blockchain
-const docChain = new Blockchain(NODE_NAME);
+const docChain = new Blockchain();
 
 // ----------------------------
 // Enhanced Routes
 // ----------------------------
 
-// Route untuk informasi node
+app.get("/login", (req, res) => {
+  if (req.session.user) return res.redirect("/");
+  res.sendFile(path.join(__dirname, "public", "login.html"));
+});
+
+app.post("/login", async (req, res) => {
+  try {
+    const user = await User.verify(req.body.username, req.body.password);
+    if (!user) return res.status(401).send("Kredensial salah");
+    req.session.user = user;
+    res.redirect(user.role === "admin" ? "/" : "/");
+  } catch (error) {
+    res.status(500).send("Error login");
+  }
+});
+
+app.get("/logout", (req, res) => {
+  req.session.destroy();
+  res.redirect("/login");
+});
+
+app.get("/", requireAuth, requireAdmin, (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
+
 app.get("/node-info", (req, res) => {
   try {
+    const user = req.session.user;
     res.json({
-      nodeName: NODE_NAME,
+      nodeName: user.username,
       status: NETWORK_NODES.size > 0 ? "Connected" : "Standalone",
-      blocksCount: docChain.chain.length - 1, // Kurangi genesis block
+      blocksCount: new Blockchain(user.username).chain.length - 1,
       peersCount: NETWORK_NODES.size,
     });
   } catch (error) {
     res.status(500).json({ error: "Gagal mendapatkan informasi node" });
   }
+});
+
+app.get("/auth/check", (req, res) => {
+  res.json(req.session.user || null);
 });
 
 // Registrasi node
@@ -545,7 +623,6 @@ app.post("/resolve-conflicts", async (req, res) => {
   }
 });
 
-// Terima blok dari node lain
 app.post("/receive-block", async (req, res) => {
   console.log("[DEBUG] Received block:", req.body);
 
@@ -558,15 +635,25 @@ app.post("/receive-block", async (req, res) => {
       req.body.validator
     );
 
-    if (docChain.validateBlock(newBlock)) {
+    const latestBlock = docChain.getLatestBlock();
+
+    // Validasi lebih ketat
+    if (
+      newBlock.previousHash === latestBlock.hash &&
+      newBlock.hash === newBlock.calculateHash()
+    ) {
       docChain.chain.push(newBlock);
       docChain.saveToFile();
       console.log("[DEBUG] Block added successfully:", newBlock);
-      res.json({ message: "Block added", block: newBlock });
-    } else {
-      console.error("[DEBUG] Invalid block received:", newBlock);
-      res.status(400).json({ message: "Invalid block" });
+      return res.json({ message: "Block added", block: newBlock });
     }
+
+    console.error("[DEBUG] Invalid block received:", newBlock);
+    res.status(400).json({
+      message: "Invalid block",
+      expectedPrevHash: latestBlock.hash,
+      receivedPrevHash: newBlock.previousHash,
+    });
   } catch (err) {
     console.error("[DEBUG] Error processing block:", err);
     res.status(500).json({ message: err.message });
@@ -579,394 +666,227 @@ app.get("/", (req, res) => {
 });
 
 // Tampilkan halaman verifikasi
-app.get("/verify", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "verify.html"));
-});
-
-// Tampilkan halaman network
-app.get("/network", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "network.html"));
+app.get("/document", requireAuth, requireAdminOrDocManager, (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "document.html"));
 });
 
 // Upload dan validasi dokumen baru
-app.post("/addDocument", upload.single("document"), async (req, res) => {
+app.post(
+  "/addDocument",
+  requireAuth,
+  requireAdminOrDocManager,
+  upload.single("document"),
+  (req, res) => {
+    try {
+      const user = req.session.user;
+      const docChain = new Blockchain(user.username);
+      const { documentId, title, issuer, recipient, issueDate } = req.body;
+      const uploadedFile = req.file;
+
+      // Validasi input
+      if (!documentId || !title || !issuer || !recipient || !issueDate) {
+        return res.status(400).send("Semua bidang harus diisi");
+      }
+
+      // Validasi format ID dokumen
+      const idRegex = /^[A-Za-z0-9\-_]+$/;
+      if (!idRegex.test(documentId)) {
+        return res
+          .status(400)
+          .send(
+            "Format ID dokumen tidak valid. Gunakan hanya huruf, angka, tanda hubung dan garis bawah."
+          );
+      }
+
+      // Cek jika dokumen dengan ID yang sama sudah ada
+      const existingDoc = docChain.getBlockByDocumentId(documentId);
+      if (existingDoc) {
+        return res
+          .status(400)
+          .send("Dokumen dengan ID ini sudah ada dalam sistem.");
+      }
+
+      if (!uploadedFile) {
+        return res.status(400).send("Tidak ada file yang diunggah");
+      }
+
+      // Enkripsi path file
+      const encryptedPath = encryptData(uploadedFile.path);
+
+      // Buat record dokumen baru
+      const record = {
+        documentId,
+        title,
+        issuer,
+        recipient,
+        issueDate,
+        documentHash: calculateFileHash(uploadedFile.path),
+        filePath: encryptedPath,
+        timestamp: Date.now(),
+        verificationStatus: true,
+      };
+
+      // Tambahkan block baru ke blockchain
+      const newBlock = new Block(
+        docChain.chain.length,
+        Date.now(),
+        record,
+        docChain.getLatestBlock().hash,
+        user.username // Gunakan username sebagai validator
+      );
+
+      docChain.addBlock(newBlock);
+      res.redirect("/blockchain");
+    } catch (error) {
+      console.error("Error adding document:", error);
+      res.status(500).send(`Error memproses dokumen: ${error.message}`);
+    }
+  }
+);
+
+app.get("/blockchain", requireAuth, requireAdminOrDocManager, (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "blockchain.html"));
+});
+
+// New endpoint to get blockchain data
+app.get("/blockchain-data", requireAuth, requireAdminOrDocManager, (req, res) => {
   try {
-    const { documentId, title, issuer, recipient, issueDate } = req.body;
-    const uploadedFile = req.file;
+    const user = req.session.user;
+    const chain = docChain.chain.map(block => {
+      // Only process file status for non-genesis blocks
+      if (block.index > 0 && block.documentData && block.documentData.filePath) {
+        let fileStatus = "Tidak Diketahui";
+        try {
+          const decryptedPath = decryptData(block.documentData.filePath);
+          fileStatus = decryptedPath && fs.existsSync(decryptedPath) ? "Ada" : "Tidak Ada";
+        } catch (error) {
+          console.error("Error checking file:", error);
+          fileStatus = "Error";
+        }
+        
+        return {
+          ...block,
+          fileStatus
+        };
+      }
+      return block;
+    });
 
-    // Validasi input
-    if (!documentId || !title || !issuer || !recipient || !issueDate) {
-      return res.status(400).send("Semua bidang harus diisi");
-    }
-
-    // Validasi format ID dokumen
-    const idRegex = /^[A-Za-z0-9\-_]+$/;
-    if (!idRegex.test(documentId)) {
-      return res
-        .status(400)
-        .send(
-          "Format ID dokumen tidak valid. Gunakan hanya huruf, angka, tanda hubung dan garis bawah."
-        );
-    }
-
-    // Cek jika dokumen dengan ID yang sama sudah ada
-    const existingDoc = docChain.getBlockByDocumentId(documentId);
-    if (existingDoc) {
-      return res
-        .status(400)
-        .send("Dokumen dengan ID ini sudah ada dalam sistem.");
-    }
-
-    if (!uploadedFile) {
-      return res.status(400).send("Tidak ada file yang diunggah");
-    }
-
-    // Enkripsi path file
-    const encryptedPath = encryptData(uploadedFile.path);
-
-    // Buat record dokumen baru
-    const record = {
-      documentId,
-      title,
-      issuer,
-      recipient,
-      issueDate,
-      documentHash: calculateFileHash(uploadedFile.path),
-      filePath: encryptedPath,
-      timestamp: Date.now(),
-      verificationStatus: true,
-    };
-
-    // Tambahkan block baru ke blockchain
-    const newBlock = new Block(
-      docChain.chain.length,
-      Date.now(),
-      record,
-      docChain.getLatestBlock().hash,
-      NODE_NAME
-    );
-
-    await docChain.addBlock(newBlock);
-    res.redirect("/blockchain");
+    res.json({
+      chain,
+      nodeName: user.username,
+      totalBlocks: chain.length,
+      totalDocuments: chain.length - 1
+    });
   } catch (error) {
-    console.error("Error adding document:", error);
-    res.status(500).send(`Error memproses dokumen: ${error.message}`);
+    console.error("Error getting blockchain data:", error);
+    res.status(500).json({ error: error.message });
   }
 });
 
-// Tampilkan semua dokumen dengan kemampuan edit
-app.get("/blockchain", (req, res) => {
-  try {
-    // Fungsi untuk memeriksa validitas block
-    const isBlockValid = (block, previousBlock) => {
-      if (block.index === 0) {
-        return block.validator === "genesis" && block.previousHash === "0";
-      }
 
-      const tempBlock = new Block(
-        block.index,
-        block.timestamp,
-        block.documentData,
-        block.previousHash,
-        block.validator
-      );
-
-      const isHashValid = block.hash === tempBlock.calculateHash();
-      const isPrevHashValid = block.previousHash === previousBlock.hash;
-
-      return isHashValid && isPrevHashValid;
-    };
-
-    let documentsHTML = `
-      <h2>Catatan Dokumen Blockchain (Node: ${NODE_NAME})</h2>
-      <div class="blockchain-controls">
-        <button onclick="refreshChain()">Refresh</button>
-        <button onclick="validateChain()">Validasi Rantai</button>
-      </div>
-    `;
-
-    docChain.chain.forEach((block, i) => {
-      const previousBlock = i > 0 ? docChain.chain[i - 1] : null;
-      const isValid = i === 0 || isBlockValid(block, previousBlock);
-      const blockClass = isValid ? "block-valid" : "block-invalid";
-
-      if (i === 0) {
-        // Genesis block
-        documentsHTML += `
-          <div class="document-card genesis ${blockClass}">
-            <h3>Genesis Block</h3>
-            <div class="block-hash">Hash: ${block.hash}</div>
-          </div>
-        `;
-        return;
-      }
-
-      let fileStatus = "Tidak Diketahui";
-      try {
-        if (block.documentData && block.documentData.filePath) {
-          const decryptedPath = decryptData(block.documentData.filePath);
-          fileStatus =
-            decryptedPath && fs.existsSync(decryptedPath) ? "Ada" : "Tidak Ada";
-        } else {
-          fileStatus = "Tidak Ada Path";
-        }
-      } catch (error) {
-        console.error("Error checking file:", error);
-        fileStatus = "Error";
-      }
-
-      documentsHTML += `
-        <div class="document-card ${blockClass}" id="block-${block.index}">
-          <div class="block-header">
-            <h3>Block #${block.index}</h3>
-            <div class="block-actions">
-              <button onclick="editBlock(${block.index})">Edit</button>
-            </div>
-          </div>
-          
-          <div class="document-details">
-            <div class="hash-info">
-              <p><strong>Previous Hash:</strong> 
-                <span class="previous-hash" contenteditable="true" data-index="${
-                  block.index
-                }">
-                  ${block.previousHash}
-                </span>
-              </p>
-              <p><strong>Block Hash:</strong> <span class="hash">${
-                block.hash
-              }</span></p>
-            </div>
-            
-            <div class="document-info">
-              <p><strong>ID Dokumen:</strong> <span contenteditable="true" data-field="documentId">${
-                block.documentData.documentId
-              }</span></p>
-              <p><strong>Judul:</strong> <span contenteditable="true" data-field="title">${
-                block.documentData.title
-              }</span></p>
-              <p><strong>Penerbit:</strong> <span contenteditable="true" data-field="issuer">${
-                block.documentData.issuer
-              }</span></p>
-              <p><strong>Penerima:</strong> <span contenteditable="true" data-field="recipient">${
-                block.documentData.recipient
-              }</span></p>
-              <p><strong>Tanggal:</strong> <span contenteditable="true" data-field="issueDate">${
-                block.documentData.issueDate
-              }</span></p>
-              <p><strong>File Status:</strong> ${fileStatus}</p>
-              <p><strong>Document Hash:</strong> ${
-                block.documentData.documentHash
-              }</p>
-            </div>
-          </div>
-          
-          <div class="edit-form" id="edit-form-${
-            block.index
-          }" style="display:none">
-            <h4>Edit Block</h4>
-            <div class="form-group">
-              <label>Previous Hash:</label>
-              <input type="text" id="edit-prev-hash-${block.index}" value="${
-        block.previousHash
-      }">
-            </div>
-            <div class="form-group">
-              <label>Document Data:</label>
-              <textarea id="edit-doc-data-${block.index}">${JSON.stringify(
-        block.documentData,
-        null,
-        2
-      )}</textarea>
-            </div>
-            <button onclick="saveBlockChanges(${
-              block.index
-            })">Save Changes</button>
-            <button onclick="document.getElementById('edit-form-${
-              block.index
-            }').style.display='none'">Cancel</button>
-          </div>
+app.get("/create-user", requireAuth, requireAdmin, (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <title>Buat Document Manager</title>
+      <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <link href="/css/style.css" rel="stylesheet">
+    </head>
+    <body>
+      <nav aria-label="Main navigation">
+        <div class="logo">BlockDoc</div>
+        <div class="nav-menu">
+          <a href="/">Verifikasi</a>
+          <a href="/document">Tambah</a>
+          <a href="/blockchain">Blockchain</a>
+          <a href="/logout">Logout</a>
         </div>
-      `;
-    });
+      </nav>
+      
+      <header>
+        <div class="header-content">
+          <h1>Buat User Document Manager</h1>
+          <p>Buat user dengan akses khusus untuk mengelola dokumen</p>
+        </div>
+      </header>
+      
+      <div class="container">
+        <form action="/create-user" method="POST">
+          <div class="form-group">
+            <label for="username">Username</label>
+            <input type="text" id="username" name="username" required>
+          </div>
+          <div class="form-group">
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" required>
+          </div>
+          <button type="submit">Buat Document Manager</button>
+        </form>
+      </div>
+    </body>
+    </html>
+  `);
+});
+
+app.post("/create-user", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { username, password } = req.body;
+
+    // Validasi input
+    if (!username || !password) {
+      return res.status(400).send("Username dan password harus diisi");
+    }
+
+    // Buat user baru dengan role document_manager
+    await User.create(username, password, "document_manager");
+    const userChain = new Blockchain(username);
 
     res.send(`
       <!DOCTYPE html>
       <html>
       <head>
         <meta charset="UTF-8">
-        <title>Daftar Dokumen Blockchain</title>
+        <title>Document Manager Dibuat</title>
         <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <link href="/css/style.css" rel="stylesheet">
-        <style>
-          .document-card {
-            margin-bottom: 20px;
-            padding: 15px;
-            border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-            transition: all 0.3s;
-          }
-          
-          .block-valid {
-            border-left: 5px solid #4CAF50;
-            background-color: #f8fff8;
-          }
-          
-          .block-invalid {
-            border-left: 5px solid #F44336;
-            background-color: #fff8f8;
-            animation: pulse 2s infinite;
-          }
-          
-          @keyframes pulse {
-            0% { background-color: #fff8f8; }
-            50% { background-color: #ffecec; }
-            100% { background-color: #fff8f8; }
-          }
-          
-          .block-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-          }
-          
-          .hash, .previous-hash {
-            font-family: monospace;
-            word-break: break-all;
-          }
-          
-          .edit-form {
-            margin-top: 15px;
-            padding: 15px;
-            background: #f5f5f5;
-            border-radius: 5px;
-          }
-          
-          .form-group {
-            margin-bottom: 10px;
-          }
-          
-          .form-group label {
-            display: block;
-            margin-bottom: 5px;
-            font-weight: bold;
-          }
-          
-          .form-group input, .form-group textarea {
-            width: 100%;
-            padding: 8px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-          }
-          
-          .form-group textarea {
-            min-height: 100px;
-            font-family: monospace;
-          }
-          
-          button {
-            padding: 8px 15px;
-            background: #db3466;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            margin-right: 10px;
-          }
-          
-          button:hover {
-            background:rgb(172, 42, 81);
-          }
-        </style>
       </head>
-      <nav aria-label="Main navigation">
-        <div class="logo">BlockDoc</div>
-        <div class="nav-menu">
-          <a href="/">Tambah</a>
-      <a href="/blockchain">Blockchain</a>
-          <a href="/verify">Verifikasi</a>
-          <a href="/network">Jaringan</a>
-        </div>
-      </nav>
-      
-      <header>
-        <div class="header-content">
-          <h1>Sistem Validasi Dokumen Blockchain</h1>
-          <p>Keamanan dan Keaslian Dokumen dengan Teknologi Blockchain</p>
-        </div>
-      </header>
       <body>
+        <nav aria-label="Main navigation">
+          <div class="logo">BlockDoc</div>
+          <div class="nav-menu">
+            <a href="/">Verifikasi</a>
+            <a href="/document">Tambah</a>
+            <a href="/blockchain">Blockchain</a>
+            <a href="/logout">Logout</a>
+          </div>
+        </nav>
+        
+        <header>
+          <div class="header-content">
+            <h1>Document Manager Berhasil Dibuat</h1>
+          </div>
+        </header>
+        
         <div class="container">
-          ${documentsHTML}
-          <div class="node-info">
-            <h3>Informasi Node</h3>
-            <p><strong>Nama Node:</strong> ${NODE_NAME}</p>
-            <p><strong>Node Terhubung:</strong> ${
-              Array.from(NETWORK_NODES).join(", ") || "Tidak ada"
-            }</p>
-            <p><strong>Total Blok:</strong> ${docChain.chain.length}</p>
-            <p><strong>Total Dokumen:</strong> ${docChain.chain.length - 1}</p>
+          <div class="success-message">
+            <h2>User document manager berhasil dibuat</h2>
+            <p>Username: ${username}</p>
+          </div>
+          <div class="nav-links">
+            <a href="/create-user">Buat Document Manager Lain</a> | 
+            <a href="/">Kembali ke Beranda</a>
           </div>
         </div>
-        
-        <script>
-          function editBlock(index) {
-            document.getElementById('edit-form-' + index).style.display = 'block';
-          }
-          
-          async function saveBlockChanges(index) {
-            const prevHash = document.getElementById('edit-prev-hash-' + index).value;
-            const docData = document.getElementById('edit-doc-data-' + index).value;
-            
-            try {
-              const response = await fetch('/update-block', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                  index: index,
-                  previousHash: prevHash,
-                  documentData: JSON.parse(docData)
-                })
-              });
-              
-              const result = await response.json();
-              if (result.success) {
-                alert('Block updated successfully!');
-                location.reload();
-              } else {
-                alert('Error: ' + result.message);
-              }
-            } catch (error) {
-              alert('Error updating block: ' + error.message);
-            }
-          }
-          
-          function refreshChain() {
-            location.reload();
-          }
-          
-          async function validateChain() {
-            try {
-              const response = await fetch('/validate-chain', {
-                method: 'POST'
-              });
-              
-              const result = await response.json();
-              alert(result.valid ? 'Chain is valid!' : 'Chain is invalid!\\n' + result.message);
-            } catch (error) {
-              alert('Error validating chain: ' + error.message);
-            }
-          }
-        </script>
       </body>
       </html>
     `);
   } catch (error) {
-    console.error("Error rendering documents:", error);
-    res.status(500).send(`Error menampilkan dokumen: ${error.message}`);
+    res.status(400).send(error.message);
   }
 });
 
@@ -993,7 +913,7 @@ app.post("/update-block", (req, res) => {
   try {
     const { index, previousHash, documentData } = req.body;
 
-    // Temukan block yang akan diupdate
+    // Find the block to update
     const blockToUpdate = docChain.chain.find((b) => b.index === index);
     if (!blockToUpdate) {
       return res
@@ -1001,11 +921,11 @@ app.post("/update-block", (req, res) => {
         .json({ success: false, message: "Block not found" });
     }
 
-    // Update data block
+    // Update block data
     blockToUpdate.previousHash = previousHash;
     blockToUpdate.documentData = documentData;
 
-    // Hitung ulang hash
+    // Recalculate hash
     blockToUpdate.hash = new Block(
       blockToUpdate.index,
       blockToUpdate.timestamp,
@@ -1014,10 +934,14 @@ app.post("/update-block", (req, res) => {
       blockToUpdate.validator
     ).calculateHash();
 
-    // Simpan perubahan
+    // Save changes
     docChain.saveToFile();
 
-    res.json({ success: true, message: "Block updated" });
+    res.json({ 
+      success: true, 
+      message: "Block updated",
+      newHash: blockToUpdate.hash
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1096,10 +1020,9 @@ app.post("/verifyDocument", upload.single("document"), async (req, res) => {
         <nav aria-label="Main navigation">
           <div class="logo">BlockDoc</div>
           <div class="nav-menu">
-            <a href="/">Tambah</a>
+                  <a href="/">Verifikasi</a>
+      <a href="/document">Tambah</a>
       <a href="/blockchain">Blockchain</a>
-            <a href="/verify">Verifikasi</a>
-            <a href="/network">Jaringan</a>
           </div>
         </nav>
         
@@ -1114,7 +1037,7 @@ app.post("/verifyDocument", upload.single("document"), async (req, res) => {
           ${resultHTML}
           <div class="nav-links">
             <a href="/">Tambah Dokumen Baru</a> | 
-            <a href="/verify">Verifikasi Dokumen Lain</a> |
+            <a href="/document">Verifikasi Dokumen Lain</a> |
             <a href="/blockchain">Lihat Semua Dokumen</a>
           </div>
         </div>
@@ -1189,11 +1112,10 @@ app.post("/verifyDocumentById", (req, res) => {
       <body>
         <nav aria-label="Main navigation">
           <div class="logo">BlockDoc</div>
-          <div class="nav-menu">
-            <a href="/">Tambah</a>
+          <div class="nav-menu">      
+          <a href="/">Verifikasi</a>
+      <a href="/document">Tambah</a>
       <a href="/blockchain">Blockchain</a>
-            <a href="/verify">Verifikasi</a>
-            <a href="/network">Jaringan</a>
           </div>
         </nav>
         
@@ -1208,7 +1130,7 @@ app.post("/verifyDocumentById", (req, res) => {
           ${resultHTML}
           <div class="nav-links">
             <a href="/">Tambah Dokumen Baru</a> | 
-            <a href="/verify">Verifikasi Dokumen Lain</a> |
+            <a href="/document">Verifikasi Dokumen Lain</a> |
             <a href="/blockchain">Lihat Semua Dokumen</a>
           </div>
         </div>
@@ -1249,9 +1171,9 @@ app.use((error, req, res, next) => {
 });
 // Mulai server
 app.listen(port, async () => {
+  await initializeAdminUser(); // Panggil inisialisasi admin
   console.log(`Node ${NODE_NAME} running at http://${LOCAL_IP}:${port}`);
 
-  // Otomatis registrasi ke jaringan
   if (process.env.BOOTSTRAP_NODE) {
     try {
       await axios.post(`${process.env.BOOTSTRAP_NODE}/register-node`, {

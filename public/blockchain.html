@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Daftar Dokumen Blockchain</title>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="/css/style.css" rel="stylesheet">
+  <style>
+    .document-card {
+      margin-bottom: 20px;
+      padding: 15px;
+      border-radius: 5px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+      transition: all 0.3s;
+    }
+    
+    .block-valid {
+      border-left: 5px solid #4CAF50;
+      background-color: #f8fff8;
+    }
+    
+    .block-invalid {
+      border-left: 5px solid #F44336;
+      background-color: #fff8f8;
+      animation: pulse 2s infinite;
+    }
+    
+    @keyframes pulse {
+      0% { background-color: #fff8f8; }
+      50% { background-color: #ffecec; }
+      100% { background-color: #fff8f8; }
+    }
+    
+    .block-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .hash, .previous-hash {
+      font-family: monospace;
+      word-break: break-all;
+    }
+    
+    .edit-form {
+      margin-top: 15px;
+      padding: 15px;
+      background: #f5f5f5;
+      border-radius: 5px;
+    }
+    
+    .form-group {
+      margin-bottom: 10px;
+    }
+    
+    .form-group label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: bold;
+    }
+    
+    .form-group input, .form-group textarea {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+    
+    .form-group textarea {
+      min-height: 100px;
+      font-family: monospace;
+    }
+    
+    button {
+      padding: 8px 15px;
+      background: #db3466;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-right: 10px;
+    }
+    
+    button:hover {
+      background:rgb(172, 42, 81);
+    }
+    
+    .invalid-hash {
+      color: #F44336;
+      font-weight: bold;
+    }
+
+    .blockchain-controls {
+      margin-bottom: 20px;
+    }
+
+    .node-info {
+      margin-top: 30px;
+      padding: 15px;
+      background: #f5f5f5;
+      border-radius: 5px;
+    }
+  </style>
+</head>
+<body>
+  <nav aria-label="Main navigation">
+    <div class="logo">BlockDoc</div>
+    <div class="nav-menu"></div>
+  </nav>
+
+  <header>
+    <div class="header-content">
+      <h1>Sistem Validasi Dokumen Blockchain</h1>
+      <p>Keamanan dan Keaslian Dokumen dengan Teknologi Blockchain</p>
+    </div>
+  </header>
+  
+  <div class="container">
+    <div id="blockchain-content">
+      <!-- Content will be loaded here dynamically -->
+    </div>
+  </div>
+  
+  <script>
+    // Load navigation menu based on user role
+    fetch('/auth/check')
+      .then(res => res.json())
+      .then(user => {
+        const nav = document.querySelector('.nav-menu');
+        if (user) {
+          if (user.role === 'admin') {
+            nav.innerHTML = 
+              '<a href="/">Verifikasi</a>' +
+              '<a href="/document">Tambah</a>' +
+              '<a href="/blockchain">Blockchain</a>' +
+              '<a href="/create-user">Buat Doc Manager</a>' +
+              '<a href="/logout">Logout</a>';
+          } else if (user.role === 'document_manager') {
+            nav.innerHTML = 
+              '<a href="/">Verifikasi</a>' +
+              '<a href="/document">Tambah</a>' +
+              '<a href="/blockchain">Blockchain</a>' +
+              '<a href="/logout">Logout</a>';
+          } else {
+            nav.innerHTML = 
+              '<a href="/">Verifikasi</a>' +
+              '<a href="/logout">Logout</a>';
+          }
+        } else {
+          nav.innerHTML =
+            '<a href="/login">Login</a>' +
+            '<a href="/register">Register</a>';
+        }
+
+        // Load blockchain data
+        loadBlockchainData(user);
+      });
+
+    function loadBlockchainData(user) {
+      fetch('/blockchain-data')
+        .then(res => res.json())
+        .then(data => {
+          renderBlockchain(data, user);
+        })
+        .catch(error => {
+          console.error('Error loading blockchain data:', error);
+          document.getElementById('blockchain-content').innerHTML = 
+            '<p class="error">Error loading blockchain data. Please refresh the page.</p>';
+        });
+    }
+
+    function renderBlockchain(data, user) {
+      const { chain } = data;
+      let content = `
+        <h2>Catatan Dokumen Blockchain (Node: ${user.username})</h2>
+        <div class="blockchain-controls">
+          <button onclick="refreshChain()">Refresh</button>
+          <button onclick="validateChain()">Validasi Rantai</button>
+        </div>
+      `;
+
+      chain.forEach((block, i) => {
+        const previousBlock = i > 0 ? chain[i - 1] : null;
+        const isValid = i === 0 || isBlockValid(block, previousBlock);
+        const blockClass = isValid ? "block-valid" : "block-invalid";
+
+        if (i === 0) {
+          // Genesis block
+          content += `
+            <div class="document-card genesis ${blockClass}">
+              <h3>Genesis Block</h3>
+              <div class="block-hash">Hash: ${block.hash}</div>
+            </div>
+          `;
+          return;
+        }
+
+        content += `
+          <div class="document-card ${blockClass}" id="block-${block.index}">
+            <div class="block-header">
+              <h3>Block #${block.index}</h3>
+              <div class="block-actions">
+                <button onclick="editBlock(${block.index})">Edit</button>
+              </div>
+            </div>
+            
+            <div class="document-details">
+              <div class="hash-info">
+                <p><strong>Previous Hash:</strong> 
+                  <span class="previous-hash" id="display-prev-hash-${block.index}">
+                    ${block.previousHash}
+                  </span>
+                </p>
+                <p><strong>Block Hash:</strong> <span class="hash">${block.hash}</span></p>
+              </div>
+              
+              <div class="document-info">
+                <p><strong>ID Dokumen:</strong> <span id="display-documentId-${block.index}">${block.documentData.documentId}</span></p>
+                <p><strong>Judul:</strong> <span id="display-title-${block.index}">${block.documentData.title}</span></p>
+                <p><strong>Penerbit:</strong> <span id="display-issuer-${block.index}">${block.documentData.issuer}</span></p>
+                <p><strong>Penerima:</strong> <span id="display-recipient-${block.index}">${block.documentData.recipient}</span></p>
+                <p><strong>Tanggal:</strong> <span id="display-issueDate-${block.index}">${block.documentData.issueDate}</span></p>
+                <p><strong>File Status:</strong> ${block.fileStatus}</p>
+                <p><strong>Document Hash:</strong> ${block.documentData.documentHash}</p>
+              </div>
+            </div>
+            
+            <div class="edit-form" id="edit-form-${block.index}" style="display:none">
+              <h4>Edit Block</h4>
+              <div class="form-group">
+                <label>Previous Hash:</label>
+                <input type="text" id="edit-prev-hash-${block.index}" value="${block.previousHash}">
+              </div>
+              <div class="form-group">
+                <label>Document Data:</label>
+                <textarea id="edit-doc-data-${block.index}">${JSON.stringify(block.documentData, null, 2)}</textarea>
+              </div>
+              <button onclick="saveBlockChanges(${block.index})">Save Changes</button>
+              <button onclick="cancelEdit(${block.index})">Cancel</button>
+            </div>
+          </div>
+        `;
+      });
+
+      content += `
+        <div class="node-info">
+          <h3>Informasi Node</h3>
+          <p><strong>Nama Node:</strong> ${user.username}</p>
+          <p><strong>Total Blok:</strong> ${chain.length}</p>
+          <p><strong>Total Dokumen:</strong> ${chain.length - 1}</p>
+        </div>
+      `;
+
+      document.getElementById('blockchain-content').innerHTML = content;
+
+      // Add event listeners to the edit forms
+      chain.forEach((block, index) => {
+        if (index > 0) {
+          const prevHashInput = document.getElementById(`edit-prev-hash-${block.index}`);
+          if (prevHashInput) {
+            prevHashInput.addEventListener('input', function() {
+              checkPrevHash(block.index, this.value, chain);
+            });
+          }
+        }
+      });
+    }
+
+    function isBlockValid(block, previousBlock) {
+      if (block.index === 0) {
+        return block.validator === "genesis" && block.previousHash === "0";
+      }
+      
+      // For simplicity, we'll just check if the previousHash matches
+      return previousBlock && block.previousHash === previousBlock.hash;
+    }
+
+    function editBlock(index) {
+      document.getElementById('edit-form-' + index).style.display = 'block';
+    }
+    
+    function cancelEdit(index) {
+      document.getElementById('edit-form-' + index).style.display = 'none';
+    }
+    
+    async function saveBlockChanges(index) {
+      const prevHash = document.getElementById('edit-prev-hash-' + index).value;
+      const docData = document.getElementById('edit-doc-data-' + index).value;
+      
+      try {
+        const response = await fetch('/update-block', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            index: index,
+            previousHash: prevHash,
+            documentData: JSON.parse(docData)
+          })
+        });
+        
+        const result = await response.json();
+        if (result.success) {
+          alert('Block updated successfully!');
+          location.reload();
+        } else {
+          alert('Error: ' + result.message);
+        }
+      } catch (error) {
+        alert('Error updating block: ' + error.message);
+      }
+    }
+
+    function checkPrevHash(index, value, chain) {
+      const prevBlockIndex = index - 1;
+      const prevBlock = chain.find(b => b.index === prevBlockIndex);
+      if (!prevBlock) return;
+      
+      const prevBlockHash = prevBlock.hash;
+      const prevHashElement = document.getElementById('edit-prev-hash-' + index);
+      
+      if (value !== prevBlockHash) {
+        prevHashElement.classList.add('invalid-hash');
+      } else {
+        prevHashElement.classList.remove('invalid-hash');
+      }
+    }
+
+    function refreshChain() {
+      location.reload();
+    }
+
+    async function validateChain() {
+      try {
+        const response = await fetch('/validate-chain', {
+          method: 'POST'
+        });
+        
+        const result = await response.json();
+        alert(result.valid ? 'Chain is valid!' : 'Chain is invalid!\n' + result.message);
+      } catch (error) {
+        alert('Error validating chain: ' + error.message);
+      }
+    }
+  </script>
+</body>
+</html>
